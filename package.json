@@ -1,0 +1,12 @@
+{
+  "name": "ministack-http2-sigv4-repro",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node repro.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sts": "3.1160.0",
+    "@smithy/node-http-handler": "4.14.0"
+  }
+}

@@ -1,0 +1,28 @@
+services:
+  ministack:
+    image: ${MINISTACK_IMAGE:-ministackorg/ministack:latest}
+    environment:
+      - AUTH=true
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:4566/_ministack/ready')
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  repro:
+    image: node:24-alpine
+    working_dir: /repro
+    command: ["sh", "-c", "npm ci --no-audit --no-fund --no-update-notifier --loglevel=error && node repro.mjs"]
+    environment:
+      - ENDPOINT=http://ministack:4566
+    volumes:
+      - .:/repro
+      # Keep the container's install out of the host's node_modules.
+      - /repro/node_modules
+    depends_on:
+      ministack:
+        condition: service_healthy
