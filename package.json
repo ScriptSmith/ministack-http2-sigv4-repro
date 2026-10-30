@@ -6,6 +6,7 @@
     "start": "node repro.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "3.1160.0",
     "@aws-sdk/client-sts": "3.1160.0",
     "@smithy/node-http-handler": "4.14.0"
   }
