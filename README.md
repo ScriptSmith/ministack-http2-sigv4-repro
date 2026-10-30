@@ -4,11 +4,11 @@
 
 Since 1.5.27, MiniStack with `AUTH=true` rejects requests that are signed with an IAM user or STS session key when `:authority` is one of the signed headers. It answers `SignatureDoesNotMatch` (`InvalidSignatureException` from JSON protocol services) although the signature is correct.
 
-The AWS SDK for JavaScript v3 signs `:authority` in place of `host` whenever it sends a request over HTTP/2 ([hostHeaderMiddleware.ts](https://github.com/aws/aws-sdk-js-v3/blob/v3.1160.0/packages-internal/core/src/submodules/client/middleware-host-header/hostHeaderMiddleware.ts#L44-L48)). Several of its clients use HTTP/2 by default, including Kinesis, Bedrock Runtime, Bedrock Agent Runtime, Polly, Lex Runtime V2 and Transcribe Streaming ([runtimeConfig.ts](https://github.com/aws/aws-sdk-js-v3/blob/v3.1160.0/clients/client-bedrock-runtime/src/runtimeConfig.ts#L31)). With default settings, these clients fail on every call signed with a session key, such as a call from a Lambda function using its execution role's credentials. Clients that default to HTTP/1.1, such as S3 and DynamoDB, fail the same way when given a `NodeHttp2Handler`.
+The AWS SDK for JavaScript v3 signs `:authority` in place of `host` whenever it sends a request over HTTP/2 ([hostHeaderMiddleware.ts](https://github.com/aws/aws-sdk-js-v3/blob/v3.1160.0/packages-internal/core/src/submodules/client/middleware-host-header/hostHeaderMiddleware.ts#L44-L48)). Ten of its clients use HTTP/2 by default, including Kinesis, Bedrock Runtime, Bedrock Agent Runtime, Polly, Lex Runtime V2 and Transcribe Streaming ([runtimeConfig.ts](https://github.com/aws/aws-sdk-js-v3/blob/v3.1160.0/clients/client-bedrock-runtime/src/runtimeConfig.ts#L31)). With default settings, every call these clients sign with an IAM user or STS session key fails, including calls from a Lambda function that uses its execution role's credentials. Clients that default to HTTP/1.1, such as S3 and DynamoDB, fail the same way when given a `NodeHttp2Handler`.
 
 ## Reproduce
 
-`repro.mjs` gets session credentials with `GetSessionToken`, then calls Bedrock `Converse` with them twice: once with the Bedrock Runtime client's default request handler, which uses HTTP/2, and once with an HTTP/1.1 handler:
+`repro.mjs` gets session credentials with `GetSessionToken`, then calls Bedrock `Converse` with them twice: once with the Bedrock Runtime client's default request handler, which uses HTTP/2, and once with `NodeHttpHandler`, which uses HTTP/1.1:
 
 ```
 docker compose run --rm repro
@@ -29,13 +29,11 @@ MINISTACK_IMAGE=ministackorg/ministack:1.5.26 docker compose run --rm repro
 docker compose down
 ```
 
-1.5.27 is the first release that fails, and 1.5.34 still does. To run the script against a MiniStack you already have running with `AUTH=true`, use `npm ci && node repro.mjs`, and set `ENDPOINT` if it doesn't listen on `http://localhost:4566`.
+Every release from 1.5.27 to 1.5.34 fails. To run the script against a MiniStack you already have running with `AUTH=true`, use `npm ci && node repro.mjs`, and set `ENDPOINT` if it doesn't listen on `http://localhost:4566`.
 
 ## Cause
 
-Over HTTP/2 the host travels in the `:authority` pseudo-header, and the JavaScript SDK signs `:authority` where an HTTP/1.1 request signs `host`.
-
-Hypercorn removes pseudo-headers before the request reaches the app, and copies `:authority` into `host`, as the [ASGI spec](https://asgi.readthedocs.io/en/latest/specs/www.html#http-connection-scope) requires ([utils.py](https://github.com/pgjones/hypercorn/blob/0.18.0/src/hypercorn/utils.py#L66-L78)):
+HTTP/2 carries the host in the `:authority` pseudo-header. Hypercorn removes pseudo-headers before the request reaches the app, and copies `:authority` into `host`, as the [ASGI spec](https://asgi.readthedocs.io/en/latest/specs/www.html#http-connection-scope) requires ([utils.py](https://github.com/pgjones/hypercorn/blob/0.18.0/src/hypercorn/utils.py#L66-L78)):
 
 ```python
 for name, value in headers:
@@ -58,7 +56,7 @@ for name in (name for name in signed_headers.split(";") if name):
 
 There is no `:authority` key, so MiniStack canonicalises `:authority:` with an empty value where the client had `:authority:ministack:4566`, and the signatures differ.
 
-MiniStack's S3 errors include the canonical request it computed, which shows the empty value. An S3 `GetObject` call made with session credentials and `requestHandler: new NodeHttp2Handler()` fails with this `CanonicalRequest`:
+MiniStack's S3 errors include the canonical request it computed. An S3 `GetObject` call made with session credentials and `requestHandler: new NodeHttp2Handler()` fails with this `CanonicalRequest`, in which `:authority` is empty:
 
 ```
 GET
@@ -73,9 +71,9 @@ x-amz-user-agent:aws-sdk-js/3.1159.0
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
-The failure depends on the signed header name, not the protocol. An HTTP/2 request that signs `host`, such as one sent by `curl --http2-prior-knowledge --aws-sigv4`, is accepted.
+An HTTP/2 request that signs `host` instead, such as one sent by `curl --http2-prior-knowledge --aws-sigv4`, is accepted.
 
-[1.5.27](https://github.com/ministackorg/ministack/releases/tag/v1.5.27) started verifying header signatures for IAM user and STS session keys. Before that, this code path didn't run for them. Header signatures made with the root key (`test`, the configured `AWS_ACCESS_KEY_ID`, or a 12-digit account ID) are still not checked, so requests signed that way are not affected.
+[1.5.27](https://github.com/ministackorg/ministack/releases/tag/v1.5.27) started verifying header signatures for IAM user and STS session keys. Earlier releases didn't check header signatures for these keys. Header signatures made with the root key (`test`, the configured `AWS_ACCESS_KEY_ID`, or a 12-digit account ID) are still not checked, so requests signed that way are not affected.
 
 ## Suggested fix
 
